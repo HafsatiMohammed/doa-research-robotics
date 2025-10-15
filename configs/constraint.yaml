@@ -1,0 +1,70 @@
+device:
+  target: jetson_orin
+  gpu: true
+  fp16: true
+  int8: false
+
+signal:
+  sample_rate_hz: 16000
+
+array:
+  name: seeed_mic_array_v2_4ch
+  reference_mic: 0          # use Mic A as reference
+  units: mm
+  mics:
+    # (x_mm, y_mm), center at (0,0), radius ≈ 27.7 mm, 90° spacing
+    - { id: 0, label: "Mic A", angle_deg: 0,   x_mm:  27.7, y_mm:  0.0 }
+    - { id: 1, label: "Mic B", angle_deg: 90,  x_mm:   0.0, y_mm: 27.7 }
+    - { id: 2, label: "Mic C", angle_deg: 180, x_mm: -27.7, y_mm:  0.0 }
+    - { id: 3, label: "Mic D", angle_deg: 270, x_mm:   0.0, y_mm: -27.7 }
+  tolerances:                # manufacturing / deployment robustness targets
+    pos_mm_std: 3.0
+    gain_db_range: [-1.5, 1.5]
+    phase_deg_range: [-5.0, 5.0]
+
+stft:
+  window_ms: 32              # 32 ms analysis window
+  hop_ms: 10                 # 10 ms hop (100 Hz frame rate)
+  fft_size: 1024             # zero-padding beyond 512-sample window is OK
+  window_fn: hann            # Hann window
+  center: false              # streaming-friendly; set true if you want librosa-style centering
+  features:
+    use_ipd: true
+    use_ild: true
+    use_gcc_shortlag: true   # short-lag GCC-PHAT as an extra channel
+
+vad:
+  engine: silero
+  frame_ms: 30               # Silero VAD window
+  hop_ms: 10                 # aligns to STFT hop
+  threshold: 0.6             # speech prob threshold
+  min_speech_ms: 150
+  min_silence_ms: 200
+  pad_ms: 50                 # expand VAD regions slightly
+  output:                     # how we use VAD
+    mask_type: soft          # use posterior as soft TF mask for features
+    align_to_stft: true
+
+realtime:
+  publish_rate_hz: 25        # emit DOA every ~40 ms (every 2–3 hops)
+  latency_budget_ms: 60      # target; hard cap 80 ms
+  smoothing:
+    type: iir_exp            # light causal smoothing to keep latency low
+    time_constant_ms: 100
+    outlier_reject_deg: 30
+
+training_defaults:
+  snr_db_range: [-5, 20]
+  rt60_s_range: [0.15, 1.0]
+  drop_mic_prob: 0.10
+
+metrics_targets:
+  mae_deg:
+    anechoic_10db: 7
+    snr0db_rt60_0_8: 15
+  acc_at_10deg_pct:
+    anechoic_10db: 85
+    snr0db_rt60_0_8: 60
+  rtf_max: 1.0
+  jitter_std_deg_max: 4
+  drop_mic_degradation_pct_max: 20

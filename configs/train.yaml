@@ -1,0 +1,45 @@
+# Training Configuration for DOA Research Robotics
+# This file contains default parameters for the feature computation and training pipeline
+
+# Dataset Configuration
+dataset:
+  rir_root: "/home/mohammed/Documents/DoA_basics/rir_generator/rir_bank"
+  split: "train"
+  local_root: "/home/mohammed/Documents/DoA_basics/rir_generator/datasets/noise"
+  speech_root: "/home/mohammed/Documents/DoA_basics/rir_generator/datasets/LibriSpeech"
+  noise_root: "/home/mohammed/Documents/DoA_basics/rir_generator/datasets/noise"
+  amb_root: "/home/mohammed/Documents/DoA_basics/rir_generator/datasets/Ambiances"
+  epoch_size: 4000
+  batch_size: 4
+  num_workers: 0
+  seed: 56
+
+# Feature Computation Parameters
+features:
+  sr: 16000                    # Sampling rate
+  win_s: 0.032                 # STFT window length in seconds
+  hop_s: 0.010                 # STFT hop length in seconds
+  nfft: 1024                    # FFT size
+  K: 72                        # Number of azimuth bins (360/K degrees resolution)
+  vad_threshold: 0.5          # VAD threshold for ground truth masking
+  max_frames: 25                # Maximum number of time frames per sub-batch
+  device: "cpu"                # Device for computation
+  vad_gt_masking: true         # Set ground truth to zeros where VAD < threshold
+
+# Test Configuration
+test:
+  test_type: "features"        # Test type: 'features' or 'test'
+  item_index: 0                # Which item in the first batch to save
+  out_wav: "sample_mix.wav"    # Output audio file
+  out_json: "sample_mix.json"  # Output metadata file
+  test_features: false         # Enable feature testing
+
+# Microphone Configuration
+microphone:
+  # Seeed microphone array v2 4ch positions (in meters)
+  # Radius ≈ 27.7 mm, 90° spacing
+  positions:
+    - [0.0277, 0.0]    # Mic 0 (A): 0°, right
+    - [0.0, 0.0277]    # Mic 1 (B): 90°, up  
+    - [-0.0277, 0.0]   # Mic 2 (C): 180°, left
+    - [0.0, -0.0277]   # Mic 3 (D): 270°, down

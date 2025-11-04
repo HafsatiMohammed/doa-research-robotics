@@ -1,0 +1,30 @@
+{
+  "n_speech": 2,
+  "azimuths_deg": [
+    71.05214905248232,
+    26.05214905248236
+  ],
+  "snr_db": 13.409214637767173,
+  "snr_bin": "medium",
+  "n_local_events": 2,
+  "has_ambience": true,
+  "room_id": "room_0412",
+  "rt60_s": 0.45079089106707043,
+  "speech_files": [
+    "train-clean-360/3979/10701/3979-10701-0038.flac",
+    "train-clean-360/3864/185126/3864-185126-0010.flac"
+  ],
+  "ambi_file": "ConditionnerFan/Air Conditioner Fan Sound 2 Ho_5060s.wav",
+  "local_files": [
+    "free-sound/noise-free-sound-0756.wav",
+    "free-sound/noise-free-sound-0694.wav"
+  ],
+  "rir_pose_ids": [
+    "srcpose-0027",
+    "srcpose-0012"
+  ],
+  "rir_meta": [
+    "/home/mohammed/Documents/DoA_basics/rir_generator/rir_bank/train/room-0412/array-uca4_r27p7mm/rt60-451/srcpose-0027/meta.json",
+    "/home/mohammed/Documents/DoA_basics/rir_generator/rir_bank/train/room-0412/array-uca4_r27p7mm/rt60-451/srcpose-0012/meta.json"
+  ]
+}

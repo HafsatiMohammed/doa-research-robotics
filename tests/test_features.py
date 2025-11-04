@@ -51,7 +51,7 @@ def get_stft_params_from_yaml(config):
 
 def main():
     # Paths
-    audio_file = Path(__file__).parent / "mixture_4ch.wav"
+    audio_file = Path(__file__).parent / "/home/mohammed/Documents/doa-research-robotics/tests/sample_mix.wav"
     config_file = Path(__file__).parent.parent / "configs" / "constraint.yaml"
     
     print(f"Loading audio file: {audio_file}")
@@ -103,8 +103,8 @@ def main():
     az_res_deg = 1.0  # Default resolution
     c = 343.0  # Speed of sound
     
-    # Compute regular SRP-PHAT map
-    print("Computing regular SRP-PHAT map...")
+    # Compute regular SRP-PHAT map (without VAD conditioning)
+    print("Computing regular SRP-PHAT map (no VAD conditioning)...")
     result_regular = estimate_azimuths_360_from_stft(
         X, freqs, mic_xy,
         method="srp",
@@ -139,7 +139,7 @@ def main():
     
     # VAD-weighted results are already extracted above
     
-    print(f"\n=== REGULAR SRP-PHAT ===")
+    print(f"\n=== REGULAR SRP-PHAT (NO VAD CONDITIONING) ===")
     print(f"Found {len(azimuths_regular)} peaks (top 5):")
     for i, peak in enumerate(azimuths_regular):
         print(f"  Peak {i+1}: {peak['azimuth_deg']:.1f}° (score: {peak['score']:.3f}, prominence: {peak['prominence']:.3f})")
@@ -162,7 +162,7 @@ def main():
     else:
         selected_peaks_vad = peaks_vad
     
-    print(f"\n=== SELECTED PEAKS (Regular) ===")
+    print(f"\n=== SELECTED PEAKS (Regular - No VAD) ===")
     for i, peak in enumerate(selected_peaks_regular):
         print(f"  Selected {i+1}: {peak['azimuth_deg']:.1f}° (score: {peak['score']:.3f})")
     
@@ -171,7 +171,7 @@ def main():
         print(f"  Selected {i+1}: {peak['azimuth_deg']:.1f}° (score: {peak['score']:.3f})")
     
     # Real values for comparison
-    true_azimuths = [90.0, 150.0]
+    true_azimuths = [309.2581368433893, 254.25813684338928]
     
     # Plot both SRP-PHAT maps for comparison
     print("Creating plot...")
@@ -198,7 +198,7 @@ def main():
     
     plt.xlabel('Azimuth (degrees)')
     plt.ylabel('SRP-PHAT Score')
-    plt.title('Regular SRP-PHAT Map')
+    plt.title('Regular SRP-PHAT Map (No VAD)')
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.xlim(0, 360)
@@ -249,7 +249,7 @@ def main():
         plt.plot(np.deg2rad(true_az), true_score, 'bo', markersize=12, 
                 label=f"True {i+1}: {true_az:.1f}°" if i == 0 else f"True {i+1}: {true_az:.1f}°")
 
-    plt.title('Regular SRP-PHAT (Polar)')
+    plt.title('Regular SRP-PHAT (Polar - No VAD)')
     plt.legend(loc='upper right', bbox_to_anchor=(1.3, 1.0))
     plt.grid(True)
     

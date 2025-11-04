@@ -1,0 +1,99 @@
+# Complete Training Configuration for DoA Research Robotics
+# This file contains all parameters for the training pipeline
+
+# Training Configuration
+epochs: 100
+batch_size: 4
+device: "cuda"  # or "cpu"
+seed: 42
+patience: 10
+grad_clip: 5.0
+mixed_precision: true
+allow_benchmark: false
+verbose: false  # Set to true to enable detailed logging and visualization
+
+# Optimizer Configuration
+optimizer:
+  name: "adamw"  # "adamw" or "adam"
+  lr: 1e-3
+  weight_decay: 1e-4
+  betas: [0.9, 0.98]
+  eps: 1e-8
+  srp_lr_mult: 2.0  # Higher LR for SRP-related parameters
+
+# Learning Rate Scheduler
+scheduler:
+  name: "onecycle"  # "onecycle" or "cosine_warmup"
+  max_lr: 1e-3
+  pct_start: 0.1
+  anneal_strategy: "cos"
+  # For cosine_warmup:
+  # warmup_ratio: 0.05
+  # min_lr: 1e-5
+
+# Loss Function Weights
+loss:
+  w_ce: 1.0      # Cross-entropy weight
+  w_vmf: 0.3     # von Mises-Fisher weight (for SCAT/FiLM)
+  w_srp: 0.1     # SRP KL divergence weight
+  w_quiet: 0.1   # Quiet entropy weight
+  w_delta: 0.3   # Delta refinement weight (for ReTiN)
+
+# Model Configuration
+model:
+  C: 128          # Hidden dimension
+  F_groups: 16    # Frequency groups for tokenization
+  M: 12           # Number of SRP prototypes (for SCATTiny)
+  heads: 2        # Number of attention heads (for SCATTiny)
+  nblk: 4         # Number of mixer blocks (for FiLMMixerSRP)
+  vmf_head: false # Whether to use von Mises-Fisher head
+
+# Dataset Configuration
+dataset:
+  rir_root: "/home/mohammed/Documents/DoA_basics/rir_generator/rir_bank"
+  split: "train"
+  local_root: "/home/mohammed/Documents/DoA_basics/rir_generator/datasets/noise"
+  speech_root: "/home/mohammed/Documents/DoA_basics/rir_generator/datasets/LibriSpeech"
+  noise_root: "/home/mohammed/Documents/DoA_basics/rir_generator/datasets/noise"
+  amb_root: "/home/mohammed/Documents/DoA_basics/rir_generator/datasets/Ambiances"
+  epoch_size: 4000
+  batch_size: 8
+  num_workers: 0
+  seed: 56
+
+# Feature Computation Parameters
+features:
+  sr: 16000                    # Sampling rate
+  win_s: 0.032                 # STFT window length in seconds
+  hop_s: 0.010                 # STFT hop length in seconds
+  nfft: 1024                    # FFT size
+  K: 72                        # Number of azimuth bins (360/K degrees resolution)
+  vad_threshold: 0.0001           # VAD threshold for ground truth masking
+  max_frames: 25                # Maximum number of time frames per sub-batch
+  device: "cuda"                # Device for computation
+  vad_gt_masking: true         # Set ground truth to zeros where VAD < threshold
+
+# DataLoader Configuration
+dataloader:
+  num_workers: 0
+  pin_memory: true
+  shuffle: true
+
+# EMA Configuration
+ema_decay: 0.999  # Set to 0 to disable EMA
+
+# Logging Configuration
+logging:
+  log_dir: "logs"
+  log_interval: 100
+  save_interval: 10
+
+# Microphone Configuration
+microphone:
+  # Seeed microphone array v2 4ch positions (in meters)
+  # Radius ≈ 27.7 mm, 90° spacing
+  positions:
+    - [0.0277, 0.0]    # Mic 0 (A): 0°, right
+    - [0.0, 0.0277]    # Mic 1 (B): 90°, up  
+    - [-0.0277, 0.0]   # Mic 2 (C): 180°, left
+    - [0.0, -0.0277]   # Mic 3 (D): 270°, down

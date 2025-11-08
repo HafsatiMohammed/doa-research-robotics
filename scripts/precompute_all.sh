@@ -4,7 +4,7 @@ set -euo pipefail
 # ---- config (edit if needed) ----
 CFG="configs/train.yaml"
 CONSTRAINT="configs/constraint.yaml"
-PRECOMP_ROOT="feature_cache_stateofart"
+PRECOMP_ROOT="feature_cache_stateofart_test"
 
 # Mixtures (4 s each): ~30h/5h/5h
 TRAIN_MIXES=30000
@@ -13,7 +13,7 @@ TEST_MIXES=9500
 
 NUM_WORKERS=8
 WINDOWS_PER_MIX=16
-SHARD_SIZE=100
+SHARD_SIZE=1000
 
 # ---- run ----
 echo "[train] precompute..."

@@ -22,6 +22,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+import matplotlib
+matplotlib.use("Agg")  # no GUI, no Tk
 import matplotlib.pyplot as plt
 import torch.cuda.amp as amp
 
@@ -596,6 +598,8 @@ def train_one_epoch(
         feats = feats.permute(0, 2, 3, 1).contiguous()
 
         # ---- forward & loss
+        # print(vad)
+        # print(vad.shape)
         with torch.amp.autocast(device_type=device.type, enabled=use_amp):
             logits = model(feats)                         # [B,T,C]
             B, T, C = logits.shape
@@ -774,10 +778,10 @@ def evaluate(model, loader, device, model_name, K=None, ema_buf=None, cfg=None):
 
     # Optionally swap in EMA weights if a shadow dict is provided
     orig_state = None
-    if ema_buf is not None and isinstance(ema_buf, dict):
-        orig_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
-        # overlay EMA params where present
-        model.load_state_dict({**orig_state, **ema_buf}, strict=False)
+    # if ema_buf is not None and isinstance(ema_buf, dict):
+    #     orig_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+    #     # overlay EMA params where present
+    #     model.load_state_dict({**orig_state, **ema_buf}, strict=False)
 
     sum_loss = 0.0
     n_steps  = 0
@@ -957,7 +961,7 @@ def main():
 
         if 'optimizer' in ckpt and 'scheduler' in ckpt:
             optimizer.load_state_dict(ckpt['optimizer'])
-            scheduler.load_state_dict(ckpt['scheduler'])
+            #scheduler.load_state_dict(ckpt['scheduler'])
         if 'scaler' in ckpt and isinstance(ckpt['scaler'], dict):
             try:
                 scaler.load_state_dict(ckpt['scaler'])
@@ -985,14 +989,14 @@ def main():
     for epoch in prog:
         cfg['loss'] = get_loss_config_for_epoch(epoch, epochs, K=K_data)
 
-        # ---- one full training epoch (has its own pbar/plots inside)
-        # tr_loss, _ = train_one_epoch(
-        #     model, train_loader, optimizer, scheduler, scaler,
-        #     ema_buf, cfg, device, args.model,
-        #     accum_steps=accum_steps, clip_norm=clip_norm, epoch=epoch,
-        #     viz_every=100, viz_dir="check_train_plots"
-        # )
-        tr_loss = 0
+        #---- one full training epoch (has its own pbar/plots inside)
+        tr_loss, _ = train_one_epoch(
+             model, train_loader, optimizer, scheduler, scaler,
+             ema_buf, cfg, device, args.model,
+             accum_steps=accum_steps, clip_norm=clip_norm, epoch=epoch,
+             viz_every=500, viz_dir="check_train_plots"
+         )
+
 
         # ---- validation (returns dict with mae_deg, acc@1, acc@5, acc_within_1bin, etc.)
         val_metrics = evaluate(
@@ -1021,8 +1025,8 @@ def main():
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer': optimizer.state_dict(),
-            'scheduler': scheduler.state_dict(),
-            'scaler': scaler.state_dict() if scaler is not None else None,
+            #'scheduler': scheduler.state_dict(),
+            #'scaler': scaler.state_dict() if scaler is not None else None,
             'ema_shadow': ema_buf,
             'best_key': best_key,
             'monitor_mode': monitor_mode,
@@ -1067,8 +1071,8 @@ def main():
                 'metrics_history': hist,
                 # include optimizer/scheduler/scaler for reproducibility
                 'optimizer': optimizer.state_dict(),
-                'scheduler': scheduler.state_dict(),
-                'scaler': scaler.state_dict() if scaler is not None else None,
+                #'scheduler': scheduler.state_dict(),
+                #'scaler': scaler.state_dict() if scaler is not None else None,
                 # backward-compat
                 'best_acc': best_metric,
             }

@@ -104,6 +104,7 @@ class RIRPose:
     pose_id: str
     rt60_s: float
     az_deg: float
+    el_deg: float
     distance_m: Optional[float]
     src_xyz: Optional[Tuple[float, float, float]]
     wavs_4: List[str]
@@ -132,11 +133,14 @@ class RIRBank:
                     if len(wavs) != 4: continue
                     with open(pm, "r") as f: P = json.load(f)
                     src = P.get("src_pose", P)
+                    #print(P)
                     az = float(src.get("azimuth_deg", P.get("az_deg", np.nan)))
                     dist = float(src.get("distance_m", P.get("distance_m", np.nan)))
-                    sxyz = src.get("src_xyz_room_m", P.get("src_xyz_room_m", None))
+                    sxyz = src.get("src_xyz_room_m", P.get("src_xyz_room_m", np.nan))
+                    elev = src.get("elevation_deg", P.get("el_deg", None))
+                    #print(elev)
                     pose_id = os.path.basename(pose_dir)
-                    self.poses.append(RIRPose(room_id, pose_id, rt60_s, az, dist, tuple(sxyz) if sxyz else None, wavs, pm))
+                    self.poses.append(RIRPose(room_id, pose_id, rt60_s, az, elev, dist, tuple(sxyz) if sxyz else None, wavs, pm))
                 continue
 
             demo = glob.glob(os.path.join(rd, "_poses", "srcpose-*", "meta.json"))
@@ -147,7 +151,8 @@ class RIRBank:
                 with open(pm, "r") as f: P = json.load(f)
                 az = float(P.get("az_deg", np.nan)); dist = float(P.get("distance_m", np.nan))
                 sxyz = P.get("src_xyz_room_m", None); pose_id = os.path.basename(pose_dir)
-                self.poses.append(RIRPose(room_id, pose_id, rt60_s, az, dist, tuple(sxyz) if sxyz else None, wavs, pm))
+                elev = float(P.get("el_deg", np.nan))
+                self.poses.append(RIRPose(room_id, pose_id, rt60_s, az, elev , dist, tuple(sxyz) if sxyz else None, wavs, pm))
 
         if not self.poses:
             raise RuntimeError(f"No RIR poses found under {self.root}/{self.split}")
@@ -440,6 +445,7 @@ class OnTheFlyMixtureDataset(torch.utils.data.Dataset):
 
         speech_stems = []
         az_list: List[float] = []
+        el_list: List[float] = []
         src_xyz_list: List[tuple] = []
         speech_ids = []
         dry_keep_fp16: List[np.ndarray] = []
@@ -458,6 +464,8 @@ class OnTheFlyMixtureDataset(torch.utils.data.Dataset):
         #print(speech_pose)
         az_list.append(float(speech_pose.az_deg))
         # elevation may not exist on all datasets; default to 0.0 if absent
+        el_list.append(float(speech_pose.el_deg))    
+
         src_xyz_list.append(speech_pose.src_xyz)
 
         # --- mix speech stems (only one) ---
@@ -521,9 +529,12 @@ class OnTheFlyMixtureDataset(torch.utils.data.Dataset):
         limit = 10 ** (-self.cfg.clip_guard_db / 20)
         if peak > limit:
             mixture = mixture * (limit / peak)
+        print(idx)    
+        #print(az_list)
         meta = {
             "n_speech": n_sp,
             "azimuths_deg": az_list,
+            "elevations_deg": el_list,
             "src_xyz": src_xyz_list,                 # <-- NEW
             "snr_db": float(snr_db),
             "room_id": room_id,

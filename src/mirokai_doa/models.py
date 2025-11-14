@@ -10,14 +10,113 @@ import torch.nn.functional as F
 
 
 # =========================
-# Building Blocks
+# DoA-style Backbone
+# =========================
+
+class ConvBlock(nn.Module):
+    """
+    Same ConvBlock as in doa_model.py:
+      Conv2d(in_ch -> out_ch, 3x3, padding=1) + BN + ReLU + MaxPool2d(pool_kernel).
+    """
+    def __init__(self, in_ch, out_ch, pool_kernel):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=pool_kernel, stride=pool_kernel)
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class DoABackbone(nn.Module):
+    """
+    DoA-style backbone (copied in spirit from doa_model.py), but input is [B,T,F,C]:
+
+    Input:  x [B, T, F, C_in]
+        -> permute to [B, C_in, T, F]
+        -> ConvBlock(C_in -> 64, pool (1,8))
+        -> ConvBlock(64 -> 64, pool (1,8))
+        -> ConvBlock(64 -> 64, pool (1,4))
+        -> x [B, 64, T, F']   (T unchanged, F' pooled)
+        -> reshape to [B, T, 64 * F']
+        -> BiLSTM  -> [B, T, out_dim]
+
+    Output: per-time embeddings [B, T, out_dim]
+    """
+    def __init__(
+        self,
+        in_ch: int = 12,
+        conv_channels: int = 64,
+        out_dim: int = 128,
+        num_layers: int = 1,
+        bidirectional: bool = True,
+    ):
+        super().__init__()
+        self.c1 = ConvBlock(in_ch,         conv_channels, pool_kernel=(1, 8))
+        self.c2 = ConvBlock(conv_channels, conv_channels, pool_kernel=(1, 8))
+        self.c3 = ConvBlock(conv_channels, conv_channels, pool_kernel=(1, 4))
+
+        self.rnn = None  # lazily built on first forward when F' is known
+        self.out_dim = out_dim
+        self.num_layers = num_layers
+        self.bidirectional = bidirectional
+
+    def _build_rnn(self, feat_per_timestep: int, device, dtype):
+        dirs = 2 if self.bidirectional else 1
+        if self.out_dim % dirs != 0:
+            raise ValueError(
+                f"out_dim={self.out_dim} must be divisible by num_directions={dirs} "
+                f"(for BiLSTM with {dirs} directions)."
+            )
+        hidden = self.out_dim // dirs
+
+        self.rnn = nn.LSTM(
+            input_size=feat_per_timestep,
+            hidden_size=hidden,
+            num_layers=self.num_layers,
+            batch_first=True,
+            bidirectional=self.bidirectional,
+        ).to(device=device, dtype=dtype)
+
+    def forward(self, x):  # x: [B, T, F, C_in]
+        B, T, F, C_in = x.shape
+
+        # -> [B, C_in, T, F] for Conv2d
+        x = x.permute(0, 3, 1, 2).contiguous()
+
+        # Conv + pooling stack (time dimension T is preserved by pool_kernel=(1, k))
+        x = self.c1(x)  # [B, 64, T, F1]
+        x = self.c2(x)  # [B, 64, T, F2]
+        x = self.c3(x)  # [B, 64, T, F3]
+
+        B2, C, T2, W = x.shape
+        assert B2 == B and T2 == T, "Time dimension T must be preserved by pooling."
+
+        # Flatten feature map per time step: (C * W)
+        x = x.permute(0, 2, 1, 3).contiguous().view(B, T, C * W)  # [B, T, C*W]
+        feat_per_timestep = x.size(-1)
+
+        # Lazy build RNN with the correct input size (depends on F)
+        if self.rnn is None:
+            self._build_rnn(feat_per_timestep, x.device, x.dtype)
+
+        x, _ = self.rnn(x)  # [B, T, out_dim]
+        return x
+
+
+# =========================
+# Shared Building Blocks
 # =========================
 
 class DWConv1d(nn.Module):
     """Depthwise 1D conv (expects [B,C,L])."""
     def __init__(self, c, k=3, dilation=1):
         super().__init__()
-        self.dw = nn.Conv1d(c, c, k, padding=dilation*(k//2), dilation=dilation, groups=c, bias=False)
+        self.dw = nn.Conv1d(c, c, k, padding=dilation * (k // 2),
+                            dilation=dilation, groups=c, bias=False)
         self.pw = nn.Conv1d(c, c, 1, bias=False)
         self.bn = nn.BatchNorm1d(c)
         self.act = nn.SiLU(True)
@@ -80,60 +179,6 @@ class SRPPrototypes(nn.Module):
         return x
 
 
-# =========================
-# New Backbone (as requested)
-# =========================
-
-class CFPoolMLP(nn.Module):
-    """
-    Backbone: pool on both C and F (keep T), then two FC(->512) and project to the required dim.
-    - Input:  x [B, C, T, F]
-    - Pooling schedule: (C,F): 12x256 -> 6x128 -> 3x64 -> 1x32 (T unchanged)
-      (implemented as three AvgPool3d steps with kernel/stride (2,1,2))
-    - Then, per time step, flatten (C' * F') and pass MLP:  (C'*F') -> 512 -> 512 -> out_dim
-    - Output: embeddings per time: [B, T, out_dim]
-    """
-    def __init__(self, out_dim=128, hidden=512, stages=3):
-        super().__init__()
-        self.stages = stages
-        self.pool = nn.AvgPool3d(kernel_size=(2, 1, 2), stride=(2, 1, 2))
-        # After 3 stages with input (12,256), we reach (1,32) so flat_dim = 1*32 = 32.
-        # To keep it general, we'll compute flat_dim at runtime on first forward and lazily build the MLP.
-        self.mlp = None
-        self.out_dim = out_dim
-        self.hidden = hidden
-
-    def _build_mlp(self, flat_dim):
-        self.mlp = nn.Sequential(
-            nn.Linear(flat_dim, self.hidden, bias=True),
-            nn.SiLU(True),
-            nn.Linear(self.hidden, self.hidden, bias=True),
-            nn.SiLU(True),
-            nn.Linear(self.hidden, self.out_dim, bias=True),
-        )
-
-    def forward(self, x):  # x: [B,C,T,F]
-        # Convert to 5D to use 3D pooling where spatial axes are (C,T,F) and channel axis is 1
-        x5 = x.unsqueeze(1)  # [B,1,C,T,F]
-        for _ in range(self.stages):
-            x5 = self.pool(x5)  # halve C and F; keep T
-        # Now: [B,1,C',T,F']
-        B, _, Cp, T, Fp = x5.shape
-        x4 = x5.squeeze(1)                 # [B,C',T,F']
-        # Flatten per time step over (C',F')
-        x_flat = x4.permute(0, 2, 1, 3).contiguous().view(B, T, Cp * Fp)  # [B,T,C'*F']
-
-        if self.mlp is None:
-            self._build_mlp(Cp * Fp)
-
-        emb = self.mlp(x_flat)  # [B,T,out_dim]
-        return emb
-
-
-# =========================
-# FiLM (time-only) and Mixer (time-only) for sequence features
-# =========================
-
 class SRPFiLM1D(nn.Module):
     """FiLM conditioning from SRP over per-time embeddings: x [B,T,C] -> FiLM(x)."""
     def __init__(self, C, K=72):
@@ -168,78 +213,78 @@ class Mixer1DBlock(nn.Module):
 
 
 # =========================
-# Models
+# Models with DoA-style Backbone
 # =========================
 
 class SCATTiny(nn.Module):
     """
-    SRP-conditioned additive cross-transformer (reworked backbone).
-    - Backbone: pool on (C,F) then MLP 512->512->C to produce per-time embeddings [B,T,C].
-    - Attention: q from SRP prototypes [B,T,M,C], kv is a single token per time [B,T,1,C].
+    SRP-conditioned additive cross-transformer with DoA-style conv+BiLSTM backbone.
+
+    Input:
+        x:   [B, T, F, C]  (batch, time, freq, channels)
+        srp: [B, T, K]
+
+    Output:
+        logits: [B, T, K]  (and optional vMF params if vmf_head=True)
     """
     def __init__(self, in_ch=12, K=72, C=128, M=12, heads=2, vmf_head=False):
         super().__init__()
         self.K, self.M, self.C = K, M, C
         self.vmf_head = vmf_head
 
-        # Backbone → [B,T,C]
-        self.backbone = CFPoolMLP(out_dim=C, hidden=512, stages=3)
-
-        # SRP prototypes per time -> [B,T,M,C]
+        self.backbone = DoABackbone(in_ch=in_ch, out_dim=C)
         self.srp_proto = SRPPrototypes(K=K, M=M, d=C)
-
-        # Additive cross-attention maps SRP queries to a single kv token per time
         self.cross = AdditiveCrossAttn(d=C, heads=heads)
-
-        # Heads
         self.cls = nn.Linear(C, K)
         if self.vmf_head:
-            self.vmf = nn.Linear(C, 3)  # mu(x,y), kappa
+            self.vmf = nn.Linear(C, 3)
 
     def forward(self, x, srp):
         """
-        x:   [B,in_ch(=12),T,F(=256)]
+        x:   [B,T,F,C]
         srp: [B,T,K]
-        returns: logits [B,T,K], optional (mu,kappa)
         """
-        B, _, T, _ = x.shape
+        B, T, F, C_in = x.shape
 
-        # Backbone per-time embeddings
-        feats_btC = self.backbone(x)                         # [B,T,C]
-        C = feats_btC.size(-1)
+        # Backbone per-time embeddings (backbone handles permute)
+        feats_btC = self.backbone(x)             # [B,T,C]
+        B, T, C = feats_btC.shape
 
         # kv tokens per time: single token
-        kv = feats_btC.unsqueeze(2)                          # [B,T,1,C]
-        kv = kv.view(B * T, 1, C)                            # [B*T, 1, C]
+        kv = feats_btC.unsqueeze(2)              # [B,T,1,C]
+        kv = kv.reshape(B * T, 1, C)             # [B*T, 1, C]
 
-        # SRP queries: [B,T,M,C] -> [B*T, M, C]
-        q = self.srp_proto(srp).contiguous().view(B * T, self.M, C)
+        # SRP queries: [B,T,M,C] -> [B*T,M,C]
+        q = self.srp_proto(srp).reshape(B * T, self.M, C)
 
-        # Cross-attend (additive): [B*T, M, C]
-        z = self.cross(q, kv)                                # SRP-conditioned summaries per time
+        # Cross-attend (additive): [B*T,M,C]
+        z = self.cross(q, kv)                    # [B*T,M,C]
 
         # Aggregate M prototypes -> one vector per time
-        z = z.mean(dim=1)                                    # [B*T, C]
+        z = z.mean(dim=1)                        # [B*T,C]
 
         # Class logits per time
-        logits = self.cls(z).view(B, T, self.K)              # [B,T,K]
+        logits = self.cls(z).view(B, T, self.K)  # [B,T,K]
 
         if not self.vmf_head:
             return logits
 
         vm = self.vmf(z).view(B, T, 3)
-        mu = F.normalize(vm[..., :2], dim=-1)                # [B,T,2]
-        kappa = F.softplus(vm[..., 2:]) + 1e-4               # [B,T,1]
+        mu = F.normalize(vm[..., :2], dim=-1)
+        kappa = F.softplus(vm[..., 2:]) + 1e-4
         return logits, (mu, kappa)
 
 
 class FiLMMixerSRP(nn.Module):
     """
-    Time-only Mixer with SRP FiLM conditioning (reworked backbone).
-    - Backbone: pool on (C,F) then MLP 512->512->C to produce per-time embeddings [B,T,C].
-    - FiLM: per-time gamma/beta from SRP.
-    - Mixer: stack of 1D temporal mixer blocks on [B,C,T].
-    - Head: per-time classification.
+    Time-only Mixer with SRP FiLM conditioning and DoA-style backbone.
+
+    Input:
+        x:   [B,T,F,C]
+        srp: [B,T,K]
+
+    Output:
+        logits: [B,T,K] (and optional vMF params)
     """
     def __init__(self, in_ch=12, K=72, C=128, nblk=4, vmf_head=False):
         super().__init__()
@@ -248,7 +293,7 @@ class FiLMMixerSRP(nn.Module):
         self.vmf_head = vmf_head
 
         # Backbone to get [B,T,C]
-        self.backbone = CFPoolMLP(out_dim=C, hidden=512, stages=3)
+        self.backbone = DoABackbone(in_ch=in_ch, out_dim=C)
 
         self.film = SRPFiLM1D(C, K=K)
         self.blocks = nn.ModuleList([Mixer1DBlock(C, T_dil=2 ** i) for i in range(nblk)])
@@ -258,9 +303,10 @@ class FiLMMixerSRP(nn.Module):
 
     def forward(self, x, srp):
         """
-        x: [B,in_ch,T,F], srp: [B,T,K] -> logits [B,T,K]
+        x:   [B,T,F,C]
+        srp: [B,T,K]
         """
-        B, _, T, _ = x.shape
+        B, T, F, C_in = x.shape
 
         # Backbone → per-time embeddings
         z = self.backbone(x)                     # [B,T,C]
@@ -317,28 +363,35 @@ class RetentiveCell(nn.Module):
 
 class ReTiNDoA(nn.Module):
     """
-    Retentive cell unrolled over time (reworked backbone).
-    - Backbone: pool on (C,F) then MLP 512->512->C to produce per-time embeddings [B,T,C].
-    - Average over nothing; directly use per-time embeddings.
+    Retentive cell unrolled over time with DoA-style backbone.
+    - Backbone: DoABackbone -> per-time embeddings [B,T,C].
+
+    Input:
+        x:   [B,T,F,C]
+        srp: [B,T,K]
+
+    Output:
+        logits: [B,T,K], delta: [B,T,1], hT: [B,C]
     """
     def __init__(self, in_ch=12, K=72, C=96):
         super().__init__()
         self.K = K
         self.C = C
-        self.backbone = CFPoolMLP(out_dim=C, hidden=512, stages=3)
+        self.backbone = DoABackbone(in_ch=in_ch, out_dim=C)
         self.cell = RetentiveCell(C)
         self.head = nn.Linear(C, K)
         self.off = nn.Linear(C, 1)  # optional Δθ regressor (radians ~[-0.13, 0.13])
 
     def forward(self, x, srp, h0=None):
         """
-        x: [B,in_ch,T,F], srp: [B,T,K]
+        x:   [B,T,F,C]
+        srp: [B,T,K]
         returns logits [B,T,K], delta [B,T,1], hT [B,C]
         """
-        B, _, T, _ = x.shape
+        B, T, F, C_in = x.shape
 
         # Backbone → per-time embeddings
-        z = self.backbone(x)                       # [B,T,C]
+        z = self.backbone(x)                     # [B,T,C]
 
         if h0 is None:
             h_state = torch.zeros(B, self.C, device=x.device, dtype=x.dtype)
@@ -347,7 +400,7 @@ class ReTiNDoA(nn.Module):
 
         logits_list = []
         delta_list = []
-        for t in range(T):  # unrolled; fixed T at export
+        for t in range(T):                       # unrolled over time
             h_state = self.cell(z[:, t, :], srp[:, t, :], h_state)  # [B,C]
             logits_list.append(self.head(h_state))                  # [B,K]
             delta_list.append(self.off(h_state))                    # [B,1]
@@ -363,30 +416,32 @@ class ReTiNDoA(nn.Module):
 
 if __name__ == "__main__":
     torch.manual_seed(0)
-    B, C_in, T, Freq = 2, 12, 300, 256
+
+    B, T, Freq, C_in = 64, 25, 513, 12
     K = 72
 
-    x = torch.randn(B, C_in, T, Freq)
-    srp = torch.randn(B, T, K)
+    # Your real layout: [B,T,F,C]
+    x = torch.randn(B, T, Freq, C_in).to('cuda')
+    srp = torch.randn(B, T, K).to('cuda')
 
-    print("Input:", x.shape)  # [2,12,300,256]
+    print("Input:", x.shape)  # [B,T,F,C]
 
     # Model 1
-    model_1 = SCATTiny(in_ch=C_in, K=K, C=128, M=12, heads=2, vmf_head=False)
+    model_1 = SCATTiny(in_ch=C_in, K=K, C=128, M=12, heads=2, vmf_head=False).to('cuda')
     logits_1 = model_1(x, srp)
     print("SCATTiny logits:", logits_1.shape)  # [B,T,K]
 
     # Model 2
-    model_2 = FiLMMixerSRP(in_ch=C_in, K=K, C=128, nblk=4, vmf_head=False)
+    model_2 = FiLMMixerSRP(in_ch=C_in, K=K, C=128, nblk=4, vmf_head=False).to('cuda')
     logits_2 = model_2(x, srp)
     print("FiLMMixerSRP logits:", logits_2.shape)  # [B,T,K]
 
     # Model 3
-    model_3 = ReTiNDoA(in_ch=C_in, K=K, C=96)
+    model_3 = ReTiNDoA(in_ch=C_in, K=K, C=96).to('cuda')
     logits_3, delta, h_state = model_3(x, srp)
     print("ReTiNDoA logits:", logits_3.shape, " delta:", delta.shape, " hT:", h_state.shape)
 
     # Also verify backbone shapes directly
-    bb = CFPoolMLP(out_dim=128, hidden=512, stages=3)
+    bb = DoABackbone(in_ch=C_in, out_dim=128).to('cuda')
     z = bb(x)  # [B,T,128]
     print("Backbone output:", z.shape)

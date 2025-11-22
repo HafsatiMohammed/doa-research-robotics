@@ -1,0 +1,78 @@
+allow_benchmark: false
+batch_size: 64
+dataloader:
+  num_workers: 0
+  pin_memory: true
+  shuffle: true
+dataset:
+  amb_root: /home/mohammed/Documents/DoA_basics/rir_generator/datasets/Ambiances
+  batch_size: 8
+  epoch_size: 4000
+  local_root: /home/mohammed/Documents/DoA_basics/rir_generator/datasets/noise
+  noise_root: /home/mohammed/Documents/DoA_basics/rir_generator/datasets/noise
+  num_workers: 0
+  rir_root: /home/mohammed/Documents/DoA_basics/rir_generator/rir_bank
+  seed: 56
+  speech_root: /home/mohammed/Documents/DoA_basics/rir_generator/datasets/LibriSpeech
+  split: train
+device: cuda
+ema_decay: 0.999
+epochs: 100
+features:
+  K: 72
+  device: cuda
+  hop_s: 0.01
+  max_frames: 25
+  nfft: 1024
+  sr: 16000
+  vad_gt_masking: true
+  vad_threshold: 0.0001
+  win_s: 0.032
+grad_clip: 5.0
+logging:
+  log_dir: logs
+  log_interval: 100
+  save_interval: 10
+loss:
+  w_ce: 1.0
+  w_delta: 0.3
+  w_quiet: 0.1
+  w_srp: 0.1
+  w_vmf: 0.3
+microphone:
+  positions:
+  - - 0.0277
+    - 0.0
+  - - 0.0
+    - 0.0277
+  - - -0.0277
+    - 0.0
+  - - 0.0
+    - -0.0277
+mixed_precision: true
+model:
+  C: 128
+  F_groups: 16
+  M: 12
+  heads: 2
+  nblk: 4
+  vmf_head: false
+optimizer:
+  betas:
+  - 0.9
+  - 0.98
+  eps: 1e-8
+  lr: 1e-3
+  name: adamw
+  srp_lr_mult: 2.0
+  weight_decay: 1e-4
+patience: 10
+precomputed_path: feature_cache_stateofart
+scheduler:
+  anneal_strategy: cos
+  max_lr: 1e-3
+  name: onecycle
+  pct_start: 0.1
+seed: 42
+use_precomputed: true
+verbose: false

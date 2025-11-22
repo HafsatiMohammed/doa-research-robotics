@@ -921,7 +921,7 @@ Suggested impulse-friendly settings:
     parser.add_argument('--config', type=str, default=None)
     parser.add_argument('--device-index', type=int, default=None)
     parser.add_argument('--sample-rate', type=int, default=16000)
-    parser.add_argument('--window-ms', type=int, default=200)
+    parser.add_argument('--window-ms', type=int, default=350)
     parser.add_argument('--hop-ms', type=int, default=100)
     parser.add_argument('--max-sources', type=int, default=3)
     parser.add_argument('--chunk-size', type=int, default=5600)
@@ -934,10 +934,10 @@ Suggested impulse-friendly settings:
     parser.add_argument('--gamma', type=float, default=1.5)
     parser.add_argument('--smooth-k', type=int, default=1)
     parser.add_argument('--window-bins', type=int, default=1)
-    parser.add_argument('--min-peak-height', type=float, default=0.10)
-    parser.add_argument('--min-window-mass', type=float, default=0.24)
-    parser.add_argument('--min-sep-deg', type=float, default=20.0)
-    parser.add_argument('--min-active-ratio', type=float, default=0.20)
+    parser.add_argument('--min-peak-height', type=float, default=0.1)
+    parser.add_argument('--min-window-mass', type=float, default=0.1)
+    parser.add_argument('--min-sep-deg', type=float, default=15)
+    parser.add_argument('--min-active-ratio', type=float, default=0.01)
 
     # event gate
     parser.add_argument('--level-delta-on-db', type=float, default=2.5)

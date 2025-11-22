@@ -6,6 +6,7 @@ Computes accuracy at 5°, 10°, 15°, and 20° tolerances.
 
 import sys
 from pathlib import Path
+import torch.nn.functional as F
 
 # Add src directory to Python path
 project_root = Path(__file__).parent.parent
@@ -30,6 +31,7 @@ from mirokai_doa.train_v2 import (
 )
 from mirokai_doa.train_utils import build_model
 from mirokai_doa.doa_model import DoAEstimator
+from mirokai_doa.models import SCATTiny, FiLMMixerSRP, ReTiNDoA
 
 
 @torch.no_grad()
@@ -39,7 +41,8 @@ def evaluate_test_set(
     device: torch.device,
     K: int = 72,
     tolerances: list = [5, 10, 15, 20],
-    vad_threshold: float = 0.1
+    vad_threshold: float = 0.1,
+    model_name: str = 'basic'
 ) -> Dict[str, float]:
     """
     Evaluate model on test set and compute accuracy metrics.
@@ -73,12 +76,19 @@ def evaluate_test_set(
         feats, vad, srp, srp_vad, gt = _normalize_batch(batch)
         
         feats = feats.to(device)  # [B, C, T, F]
-        
+        srp = srp.to(device)        
         # Match train: [B, C, T, F] -> [B, T, F, C]
         feats = feats.permute(0, 2, 3, 1).contiguous()
         
         # Forward pass
-        logits = model(feats)  # [B, T, K]
+        if model_name == "basic":
+            logits = model(feats)
+        elif model_name == "retin":
+
+            logits,_,_ = model(feats, srp)
+        else:  
+                    
+            logits= F.softmax(model(feats, srp), dim=-1)   
         
         B, T, C = logits.shape
         assert C == K, f"Model output K={C} doesn't match config K={K}"
@@ -108,7 +118,8 @@ def evaluate_test_set(
         # Create VAD mask: only consider frames with VAD >= threshold
         vad_mask = vad_probs >= vad_threshold  # [B, T] bool
         
-        # Get argmax prediction (discrete bin)
+        # Get argmax prediction (discrete bin
+
         pred_bins = logits.argmax(dim=-1)  # [B, T]
         
         # Compute angular error in degrees using argmax (not circular mean)
@@ -226,36 +237,62 @@ def load_model_from_checkpoint(
     print(f"Detected/Using model type: {model_name}")
     
     # Build model
-    if model_name == 'doa':
-        # DoAEstimator needs special handling
-        state_dict = checkpoint.get('model_state_dict', checkpoint.get('state_dict', checkpoint))
-        # Try to infer num_mics and num_classes from checkpoint
-        num_mics = 12  # Default (4 mics * 3 features = 12)
-        K = config.get('features', {}).get('K', 72)
-        num_classes = K  # Use K from config
-        
-        # Check if we can infer from state dict keys
-        if 'c1.net.0.weight' in state_dict:
-            num_mics = state_dict['c1.net.0.weight'].shape[1]
-        if 'ff2.weight' in state_dict:
-            num_classes = state_dict['ff2.weight'].shape[0]
-        
-        print(f"Building DoAEstimator with num_mics={num_mics}, num_classes={num_classes}")
-        model = DoAEstimator(num_mics=num_mics, num_classes=num_classes)
+    if model_name == 'basic':
+        model = DoAEstimator(num_mics=12, num_classes=72).to(device)
+    elif model_name == 'retin':
+        model = ReTiNDoA(in_ch=12, K=72, C=128).to(device)
+    elif model_name == 'film':
+        model = FiLMMixerSRP( in_ch=12, K=72, C=128).to(device)
+    elif model_name == 'scat':
+        model = SCATTiny( in_ch=12, K=72, C=128).to(device)
     else:
-        model = build_model(model_name, config)
+        print('model not supported')
     
     model = model.to(device)
+    print(model)
     
-    # Load weights
+    # Get state dict from checkpoint
     if 'model_state_dict' in checkpoint:
-        model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        state_dict = checkpoint['model_state_dict']
     elif 'state_dict' in checkpoint:
-        model.load_state_dict(checkpoint['state_dict'], strict=False)
+        state_dict = checkpoint['state_dict']
     else:
-        model.load_state_dict(checkpoint, strict=False)
+        state_dict = checkpoint
+    
+    # Check if RNN keys exist in checkpoint (for models with DoABackbone)
+    has_rnn_keys = any(k.startswith('backbone.rnn.') for k in state_dict.keys())
+    
+    # If RNN keys exist, initialize RNN before loading weights
+    # This ensures the RNN structure matches the checkpoint
+    if has_rnn_keys and hasattr(model, 'backbone') and hasattr(model.backbone, 'rnn'):
+        # Infer RNN input size from checkpoint weights
+        # weight_ih_l0 has shape [hidden_size * 4, input_size] for LSTM
+        rnn_key = 'backbone.rnn.weight_ih_l0'
+        if rnn_key in state_dict:
+            checkpoint_input_size = state_dict[rnn_key].shape[1]
+            # Get RNN parameters from backbone
+            backbone = model.backbone
+            dirs = 2 if backbone.bidirectional else 1
+            hidden = backbone.out_dim // dirs
+            
+            # Manually build RNN with the correct input size from checkpoint
+            backbone.rnn = nn.LSTM(
+                input_size=checkpoint_input_size,
+                hidden_size=hidden,
+                num_layers=backbone.num_layers,
+                batch_first=True,
+                bidirectional=backbone.bidirectional,
+            ).to(device=device, dtype=torch.float32)
+            
+            print(f"Initialized RNN with input_size={checkpoint_input_size} from checkpoint")
+    
+    # Load all weights (including RNN if it was initialized)
+    model.load_state_dict(state_dict, strict=False)
     
     print(f"Loaded model from {checkpoint_path}")
+    if has_rnn_keys:
+        print("RNN weights loaded from checkpoint")
+    
     return model
 
 
@@ -374,7 +411,8 @@ def main():
         device=device,
         K=K,
         tolerances=[5, 10, 15, 20],
-        vad_threshold=vad_threshold
+        vad_threshold=vad_threshold,
+        model_name=args.model
     )
     
     # Print results

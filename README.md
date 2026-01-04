@@ -230,9 +230,9 @@ If you use this code in your research, please cite:
 ```bibtex
 @software{mirokai_doa,
   title = {Mirokaï DOA Research Robotics},
-  author = {[Your Name]},
+  author = {[Mohammed HAFSATI]},
   year = {2025},
-  url = {[Repository URL]}
+  url = {[https://github.com/HafsatiMohammed/doa-research-robotics/]}
 }
 ```
 
